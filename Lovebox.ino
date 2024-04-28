@@ -3,13 +3,19 @@
 #include <EEPROM.h>
 #include <Servo.h>
 #include "SSD1306Wire.h"
-
+#include <BH1750.h>
+#include "Wire.h"
+#include "WiFiUdp.h"
+#include <NTPClient.h>
 #include "credentials.h"
+
 const char* ssid = _ssid;
 const char* password = _password;
 const String url = _url;
+const char* host = _host;
 
-SSD1306Wire oled(0x3C, D2, D1);
+
+SSD1306Wire oled(0x3C, D4,D3);
 Servo myservo; 
 int pos = 90;
 int increment = -1;
@@ -18,8 +24,59 @@ String line;
 String messageMode;
 char idSaved; 
 bool wasRead;  
+BH1750 lightMeter;
+
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org");
+unsigned long epochTime;
+
+unsigned long getInLoveSince(){
+  timeClient.update();
+  unsigned long inLoveSince = 1630800000;
+  unsigned long now = timeClient.getEpochTime();
+  return ((now-inLoveSince)/60/60/24)+1;
+}
+
+void initOled(){
+  oled.init();
+  oled.flipScreenVertically();
+  oled.setColor(WHITE);
+  oled.setTextAlignment(TEXT_ALIGN_LEFT);
+  oled.setFont(ArialMT_Plain_10);
+}
+
+void mainScreen(){
+  initOled();
+  oled.clear();
+  if(WiFi.status()==WL_CONNECTED){
+    oled.drawString(25,4,String(getInLoveSince()) + " dni spolu <3");
+    int32_t rssi = WiFi.RSSI();
+    if(rssi>-50){
+      oled.drawString(37,50,"Wi-Fi - 100%");
+    }else if (rssi>=-60){
+      oled.drawString(37,50,"Wi-Fi - 80%");
+    }else if (rssi>=-70){
+      oled.drawString(37,50,"Wi-Fi - 50%");
+    }else if (rssi>=-80){
+      oled.drawString(37,50,"Wi-Fi - 30%");
+    }else if (rssi>=-90){
+      oled.drawString(37,50,"Wi-Fi - 10%");
+    }
+  }
+  oled.drawString(26, 30, "<3 LOVEBOX <3");
+  oled.display();
+}
+
+float getLightStat(){
+  Wire.begin(D2,D1);
+  lightMeter.begin();
+  float lux = lightMeter.readLightLevel();
+  return lux;
+
+}
 
 void drawMessage(const String& message) {
+  initOled();
   oled.clear();
 
   // differentiat between 't'ext and image message
@@ -46,27 +103,31 @@ void wifiConnect() {
     // connecting to WiFi
     while (WiFi.status() != WL_CONNECTED) {
       delay(500);
+      Serial.println("Connecting");
     }
+    Serial.println("Connected");
+    mainScreen();
   }
 }
 
 void getGistMessage() {
   const int httpsPort = 443;
-  const char* host = "gist.githubusercontent.com";
-  const char fingerprint[] = "70 94 DE DD E6 C4 69 48 3A 92 70 A1 48 56 78 2D 18 64 E0 B7";
-  
+ 
+  const char fingerprint[] = "BD DE 0F 6B C8 5F CD AB 7F 46 05 DF 99 AB 78 B8 C3 C2 73 E9";
+  Serial.println("Getting message");
   WiFiClientSecure client;
   client.setFingerprint(fingerprint);
   if (!client.connect(host, httpsPort)) {
-    return; // failed to connect
+    Serial.println("Connection failed");
+    return;
   }
   
-  client.print(String("GET ") + url + " HTTP/1.1\r\n" +
+  // Make HTTP GET request
+  client.print(String("GET " + String(url) + " HTTP/1.1\r\n") +
                "Host: " + host + "\r\n" +
-               "User-Agent: ESP8266\r\n" +
                "Connection: close\r\n\r\n");
 
-  while (client.connected()) {
+   while (client.connected()) {
     String temp = client.readStringUntil('\n');
     if (temp == "\r") {
       break;
@@ -97,34 +158,35 @@ void getGistMessage() {
     EEPROM.write(144, wasRead);
     EEPROM.commit(); 
     drawMessage(line);
+    Serial.println(line);
   }
 }
 
 void spinServo(){
-    myservo.write(pos);      
-    delay(50);    // wait 50ms to turn servo
+    for (pos = 0; pos <= 180; pos += 1) { // goes from 0 degrees to 180 degrees
+      // in steps of 1 degree
+        myservo.write(pos);              // tell servo to go to position in variable 'pos'
 
-    if(pos == 75 || pos == 105){ // 75°-105° range
-      increment *= -1;
-    }
-    pos += increment;
+        delay(15);                       // waits 15 ms for the servo to reach the position
+      }
+      for (pos = 180; pos >= 0; pos -= 1) { // goes from 180 degrees to 0 degrees
+        myservo.write(pos);              // tell servo to go to position in variable 'pos'
+
+        delay(15);                       // waits 15 ms for the servo to reach the position
+      }
 }
 
+
 void setup() {
-  myservo.attach(16);       // Servo on D0
-  
-  oled.init();
-  oled.flipScreenVertically();
-  oled.setColor(WHITE);
-  oled.setTextAlignment(TEXT_ALIGN_LEFT);
-  oled.setFont(ArialMT_Plain_10);
+  myservo.attach(D5);       // Servo on D0
+  myservo.write(95);
+  Serial.begin(9600);
+  mainScreen();
      
-  oled.clear();
-  oled.drawString(30, 30, "<3 LOVEBOX <3");
-  oled.display();
+  
   
   wifiConnect();
-
+  
   EEPROM.begin(512);
   idSaved = EEPROM.get(142, idSaved);
   wasRead = EEPROM.get(144, wasRead);
@@ -138,17 +200,20 @@ void loop() {
   if(wasRead){
     getGistMessage();   
   }
-  
+ 
   while(!wasRead){   
     yield();
     spinServo();    // turn heart
-    lightValue = analogRead(0);      // read light value
-    if(lightValue > 300) { 
+    lightValue = getLightStat();     // read light value
+    if(lightValue > 0) { 
       wasRead = 1;
       EEPROM.write(144, wasRead);
       EEPROM.commit();
+      myservo.write(95);
+      delay(3500);
+      mainScreen();
     }
   }
   
-  delay(60000); // wait a minute before request gist again
+  delay(5000); // wait a five seconds
 }
