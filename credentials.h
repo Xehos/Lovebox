@@ -1,5 +1,5 @@
-const char* _ssid = "WLAN_NAME";
-const char* _password = "PASSWORD";
+const char* _ssid = "WLAN_NAME"; // wifi ssid
+const char* _password = "PASSWORD"; // wifi password
 
-// url to gist: /yourUsername/generatedHashValue/raw/yourFilename
-const String _url = "PATH_tO_YOUR_GIST";
+const String _url = "PATH_TO_YOUR_FILE"; // /LB/LoveBox.txt
+const String _host = "SERVER_HOST" // yourserver.com
